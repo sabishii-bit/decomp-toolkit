@@ -969,6 +969,9 @@ fn locate_extab_extabindex(obj: &mut ObjInfo) -> Result<()> {
         let extab_section_address = extab_section.address;
         let extab_section_size = extab_section.size;
 
+        // DO NOT sort eti_entries - preserve original order to match linking
+        // eti_entries.sort_by_key(|e| e.extab_addr);
+
         for entry in &eti_entries {
             // Add functions from extabindex entries as known function bounds
             let (section_index, _) = obj.sections.at_address(entry.function).map_err(|_| {
@@ -1006,14 +1009,37 @@ fn locate_extab_extabindex(obj: &mut ObjInfo) -> Result<()> {
             )?;
         }
 
-        let mut entry_iter = eti_entries.iter().peekable();
+        // For extab symbol generation, we need entries sorted by extab address
+        // to correctly calculate extab sizes
+        let mut eti_entries_by_extab = eti_entries.clone();
+        eti_entries_by_extab.sort_by_key(|e| e.extab_addr);
+        let mut entry_iter = eti_entries_by_extab.iter().peekable();
         loop {
             let (addr, size) = match (entry_iter.next(), entry_iter.peek()) {
-                (Some(a), Some(&b)) => (a.extab_addr, b.extab_addr - a.extab_addr),
-                (Some(a), None) => (
-                    a.extab_addr,
-                    (extab_section_address + extab_section_size) as u32 - a.extab_addr,
-                ),
+                (Some(a), Some(&b)) => {
+                    if b.extab_addr < a.extab_addr {
+                        log::warn!(
+                            "Skipping invalid extab entry at {:#010X}: next entry at {:#010X} is before current",
+                            a.extab_addr,
+                            b.extab_addr
+                        );
+                        continue;
+                    }
+                    (a.extab_addr, b.extab_addr - a.extab_addr)
+                }
+                (Some(a), None) => {
+                    let size = (extab_section_address + extab_section_size) as u32 - a.extab_addr;
+                    if size as u64 > extab_section_size {
+                        log::warn!(
+                            "Skipping invalid extab entry at {:#010X}: calculated size {:#X} exceeds section size {:#X}",
+                            a.extab_addr,
+                            size,
+                            extab_section_size
+                        );
+                        break;
+                    }
+                    (a.extab_addr, size)
+                }
                 _ => break,
             };
             obj.add_symbol(

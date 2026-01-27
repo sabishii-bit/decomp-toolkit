@@ -169,13 +169,20 @@ impl Tracker {
                 log::warn!("Failed to get extab data for symbol {}", extab_name);
                 continue;
             };
-            let data = match decode_extab(extab_data) {
-                Ok(decoded_data) => decoded_data,
-                Err(e) => {
+            let data = match std::panic::catch_unwind(|| decode_extab(extab_data)) {
+                Ok(Ok(decoded_data)) => decoded_data,
+                Ok(Err(e)) => {
                     log::warn!(
                         "Exception table decoding failed for symbol {}, reason: {}",
                         extab_name,
                         e
+                    );
+                    continue;
+                }
+                Err(_) => {
+                    log::warn!(
+                        "Exception table decoding panicked for symbol {} (malformed data)",
+                        extab_name
                     );
                     continue;
                 }

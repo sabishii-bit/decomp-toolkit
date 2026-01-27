@@ -175,6 +175,12 @@ impl ObjSection {
             );
         } else {
             ensure!(
+                start <= end,
+                "Invalid range {:#010X}-{:#010X} (start > end)",
+                start,
+                end
+            );
+            ensure!(
                 self.contains_range(start..end),
                 "Range {:#010X}-{:#010X} outside of section {}: {:#010X}-{:#010X}",
                 start,
