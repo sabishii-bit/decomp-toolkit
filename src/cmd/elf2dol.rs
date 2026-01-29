@@ -27,6 +27,9 @@ pub struct Args {
     /// sections (by name) to ignore
     #[argp(option, long = "ignore")]
     deny_sections: Vec<String>,
+    /// path to original DOL file for post-link .ctors patching
+    #[argp(option, long = "patch-ctors", from_str_fn(native_path))]
+    patch_ctors: Option<Utf8NativePathBuf>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -159,6 +162,13 @@ pub fn run(args: Args) -> Result<()> {
 
     // Done!
     out.flush()?;
+    drop(out);
+
+    // Post-link .ctors patching if requested
+    if let Some(ref orig_dol_path) = args.patch_ctors {
+        patch_ctors_section(orig_dol_path, &args.dol_file, &header)?;
+    }
+
     Ok(())
 }
 
@@ -214,4 +224,93 @@ fn is_alloc(flags: object::SectionFlags) -> bool {
 #[inline]
 fn is_name_allowed(s: &object::Section, denied: &[String]) -> bool {
     !denied.contains(&s.name().unwrap_or("[error]").to_string())
+}
+
+/// Post-link .ctors section patching.
+///
+/// This patches the .ctors section in the built DOL to match the original DOL.
+/// This is needed because CodeWarrior mwld doesn't support explicit file ordering
+/// for .ctors - it auto-collects in link order. When units have both extab and .ctors
+/// at different positions, we must prioritize extab order (for exception handling),
+/// then fix .ctors via post-link patching.
+fn patch_ctors_section(
+    orig_dol_path: &Utf8NativePathBuf,
+    built_dol_path: &Utf8NativePathBuf,
+    header: &DolHeader,
+) -> Result<()> {
+    // Read original DOL
+    let mut orig_file = open_file(orig_dol_path, true)?;
+    let orig_data = orig_file.map()?;
+
+    // Read built DOL
+    let mut built_data = std::fs::read(built_dol_path)?;
+
+    // Find .ctors section in both DOLs by comparing data sections
+    // .ctors is typically identifiable by being a small data section
+    let mut ctors_found = false;
+
+    for (i, section) in header.data_sections.iter().enumerate() {
+        if section.offset == 0 || section.size == 0 {
+            continue;
+        }
+
+        // Read the section from both DOLs
+        let orig_offset = section.offset as usize;
+        let orig_end = orig_offset + section.size as usize;
+        let built_offset = section.offset as usize;
+        let built_end = built_offset + section.size as usize;
+
+        if orig_end > orig_data.len() || built_end > built_data.len() {
+            continue;
+        }
+
+        let orig_section_data = &orig_data[orig_offset..orig_end];
+        let built_section_data = &built_data[built_offset..built_end];
+
+        // Skip if sections already match
+        if orig_section_data == built_section_data {
+            continue;
+        }
+
+        // Check if this looks like .ctors by checking for function pointers
+        // .ctors contains addresses in the 0x80000000 range
+        let mut looks_like_ctors = true;
+        for chunk in orig_section_data.chunks(4) {
+            if chunk.len() == 4 {
+                let value = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                // Check if it's a valid code address or zero (padding)
+                if value != 0 && (value < 0x80000000 || value >= 0x81800000) {
+                    looks_like_ctors = false;
+                    break;
+                }
+            }
+        }
+
+        if !looks_like_ctors {
+            continue;
+        }
+
+        // This appears to be .ctors - patch it
+        log::info!(
+            "Patching .ctors section (data{}) at 0x{:08X}, size=0x{:X}",
+            i,
+            section.address,
+            section.size
+        );
+
+        built_data[built_offset..built_end].copy_from_slice(orig_section_data);
+        ctors_found = true;
+
+        // Typically only one .ctors section, but continue to check all
+    }
+
+    if ctors_found {
+        // Write patched DOL
+        std::fs::write(built_dol_path, &built_data)?;
+        log::info!("Successfully patched .ctors section");
+    } else {
+        log::debug!("No .ctors section differences found - no patching needed");
+    }
+
+    Ok(())
 }
