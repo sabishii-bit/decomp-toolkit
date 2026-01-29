@@ -458,15 +458,7 @@ where
 fn parse_extab(symbols: &[ObjSymbol], entry: &SymbolEntry, section: &ObjSection) -> Result<String> {
     let symbol = &symbols[entry.index as usize];
     let data = section.symbol_data(symbol)?;
-    let decoded = match std::panic::catch_unwind(|| cwextab::decode_extab(data)) {
-        Ok(Ok(decoded)) => decoded,
-        Ok(Err(e)) => {
-            return Err(anyhow!("Failed to decode extab for {}: {}", symbol.name, e));
-        }
-        Err(_) => {
-            return Err(anyhow!("Panic while decoding extab for {} (malformed data)", symbol.name));
-        }
-    };
+    let decoded = cwextab::decode_extab(data)?;
     let function_names = section
         .relocations
         .range(symbol.address as u32..(symbol.address + symbol.size) as u32)

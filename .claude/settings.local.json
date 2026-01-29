@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(target/release/dtk.exe:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

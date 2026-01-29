@@ -45,6 +45,7 @@ fn generate_explicit_section_defs(obj: &ObjInfo) -> String {
         } else {
             // Don't generate explicit file list - let linker use natural link order
             // This includes extab/extabindex (which follow link order) and other sections
+            // NOTE: .ctors/.dtors CANNOT have explicit file lists - mwld rejects them
             Vec::new()
         };
 
